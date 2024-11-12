@@ -62,7 +62,7 @@
 
   <!-- JSP -->
   <tr align="center">
-    <td><img src="https://img.shields.io/badge/spring-6DB33F?style=flat-square&logo=spring&logoColor=white"/></td> 
+    <td><img src="https://img.shields.io/badge/jsp-007396?style=flat-square&logoColor=white"/></td> 
     <td> JSP 2.3 & servlet (부트캠프) </td>
     <td> <a href="https://github.com/geonokwon/KGO_study/tree/main/JSP">Note</a></td>
   </tr>
