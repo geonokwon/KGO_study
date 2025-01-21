@@ -262,3 +262,189 @@ const saveUserToDynamoDB = async (userId, internalToken, refreshToken) => {
   }  
 }
 ```
+
+### 2025.01.21(회원가입 로직 구현)
+#### 회원가입 로직변경(게스트회원 , 소셜로그인 구분)
+```js
+import axios from "axios";
+import jwt from "jsonwebtoken";
+import AWS from "aws-sdk";
+
+
+//DynamoDB
+const dynamoDB = new AWS.DynamoDB.DocumentClient({
+  region: "ap-northeast-2", //서울 리전 설정
+});
+const tableName = "";
+
+//jsonwebtoken 라이브러리 을 생성하거나 검증할떄 사용하는 시크릿키(Base64 인코딩)
+const SECRET_KEY = ""
+
+
+//AWS API GateWay
+const REDIRECT_URI = "";
+
+//============================================================================================================
+const GOOGLE_CLIENT_ID = "";
+const GOOGLE_CLIENT_SECRET = "";
+
+const FACEBOOK_CLIENT_ID = "FACEBOOK_CLIENT_ID";
+const FACEBOOK_SECRET = "FACEBOOK_SECRET";
+//============================================================================================================
+
+
+
+export const handler = async (event) => {
+  const key = event.pathParameters?.key || "guest"
+
+  let userInfo
+
+  switch (key) {
+    case "guest":
+      userInfo = await guestHandler()
+      break
+    case "google":
+      const body = JSON.parse(event.body);
+      const googleAuthCode = body.code;
+      userInfo = await googleHandler(googleAuthCode)
+      break
+    // case "apple":
+    //   userInfo = await appleHandler()
+    //   break
+    default:
+      return {
+        statusCode: 400,
+        body: JSON.stringify({
+          message: "지원하지 않는 회원가입 입니다"
+        })
+      }
+  }
+  return userInfo;
+}
+
+
+
+
+//게스트 회원가입
+const guestHandler = async () => {
+  let isUnique = false
+  let guestId;
+
+  //1. guest 아이디 생성(생성한 아이디 조회후 유일한 값 체크)
+  while (!isUnique){
+    guestId = `guest_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+    //DynamoDB 에서 동일한 guestID가 있는지 확인
+    const param = {
+      TableName: tableName,
+      Key: { userID: guestId },
+    }
+
+    const result = await dynamoDB.get(param).promise();
+
+    if (!result.Item) {
+      isUnique = true;
+    }
+  }
+
+  //2. 내부토큰 발행
+  const internalToken = generateInternalToken(guestId)
+
+  //3. DynamoDB 유저 정보 저장 (guest 아이디, 내부토큰, loginType, refreshToken(초깃값 null) )
+  const userInfo = await createUserInfo(guestId, internalToken, "guest")
+
+  if (!userInfo.success){
+    return {
+      statusCode: 400,
+      body: JSON.stringify({
+        message: "데이터베이스 저장 실패",
+        error: userInfo.error
+      })
+    }
+  }
+  //4. 생성된 정보 반환
+  return {
+    statusCode: 200,
+    header: { InternalToken: internalToken },
+    body: JSON.stringify({
+      message: "회원가입 성공",
+    }),
+  };
+}
+
+//google 회원가입
+const googleHandler = async (code) => {
+
+  //1. google OAuth2 에서 user 정보 받기
+  let tokenResponse
+  try {
+    tokenResponse = await axios.post("https://oauth2.googleapis.com/token", null, {
+      headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      params: {
+        code: code.code,
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: REDIRECT_URI,
+        grant_type: 'authorization_code',
+      }
+    })
+  } catch (error) {
+    return { success: false, error: error.message + "\n 구글 토큰 요청 실패"}
+  }
+  const googleToken = tokenResponse.data
+  if (!tokenResponse || !tokenResponse.data){
+    return { success: false, error: "유효하지 않은 응답입니다."}
+  }
+  const user = jwt.decode(googleToken.id_token);
+  if (!user || !user.sub) {
+    return { success: false, error: "유효하지 않은 ID 토큰입니다."}
+  }
+
+  //2. 내부 토큰 발행
+  const internalToken = generateInternalToken(user.sub)
+
+  //3. DynamoDB 유저 정보 저장 (google 아이디, 내부토큰, loginType, refreshToken(초깃값 null) )
+  const userInfo = await createUserInfo(user.sub, internalToken, "google", googleToken.refresh_token)
+  if (!userInfo.success){
+    return {
+      statusCode: 400,
+      body: JSON.stringify({
+        message: "데이터베이스 저장 실패",
+        error: userInfo.error
+      })
+    }
+  }
+  //4. 생성된 정보 반환
+  return {
+    statusCode: 200,
+    header: { InternalToken: internalToken },
+    body: JSON.stringify({ message: "회원가입 성공" }),
+  };
+}
+
+//DynamoDB 유저 정보 저장
+async function createUserInfo (id, internalToken, loginType, refreshToken = null) {
+  const guestUserItem = {
+    TableName: tableName,
+    Item: {
+      userID: id,
+      internalToken: internalToken,
+      refreshToken: refreshToken,
+      loginType: loginType,
+      createdAt: new Date().toISOString()
+    }
+  }
+  try {
+    await dynamoDB.put(guestUserItem).promise()
+    return { success: true }
+  } catch (error) {
+    return { success : false, error: error.message}
+  }
+
+}
+
+//내부 토큰 생성 함수
+function generateInternalToken(id){
+  return jwt.sign({id: id}, SECRET_KEY)
+}
+```
